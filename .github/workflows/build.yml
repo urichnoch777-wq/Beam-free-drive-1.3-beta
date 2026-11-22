@@ -1,0 +1,84 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # Последняя стабильная версия Godot на ноябрь 2026. Для обновления поменяйте номер.
+  GODOT_VERSION: "4.7.2"
+  EXPORT_NAME: SoftBeamDrive
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK (пакеты из требований Godot)
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | sudo -E env "PATH=$PATH" "$SDKM" --licenses > /dev/null || true
+          sudo -E env "PATH=$PATH" "$SDKM" "platform-tools" "build-tools;35.0.1" "platforms;android-35" "cmake;3.10.2.4988404" "ndk;28.1.13356709"
+
+      - name: Godot и шаблоны экспорта
+        run: |
+          V="$GODOT_VERSION"
+          URL="https://github.com/godotengine/godot-builds/releases/download/${V}-stable"
+          wget -q "$URL/Godot_v${V}-stable_linux.x86_64.zip"
+          wget -q "$URL/Godot_v${V}-stable_export_templates.tpz"
+          unzip -q "Godot_v${V}-stable_linux.x86_64.zip"
+          sudo install -m 755 "Godot_v${V}-stable_linux.x86_64" /usr/local/bin/godot
+          mkdir -p "$HOME/.local/share/godot/export_templates/${V}.stable"
+          unzip -q "Godot_v${V}-stable_export_templates.tpz" -d tpl
+          mv tpl/templates/* "$HOME/.local/share/godot/export_templates/${V}.stable/"
+          godot --version
+
+      - name: Debug-ключ подписи
+        run: |
+          keytool -genkeypair -v -keystore "$RUNNER_TEMP/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
+
+      - name: Экспорт debug APK
+        run: |
+          mkdir -p build
+          godot --headless --import || true
+          godot --headless --export-debug "Android" "build/${EXPORT_NAME}-debug.apk"
+          ls -lh build
+
+      - name: Экспорт release APK (если заданы секреты)
+        if: env.KEYSTORE_B64 != ''
+        env:
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="$RUNNER_TEMP/release.keystore"
+          godot --headless --export-release "Android" "build/${EXPORT_NAME}-release.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.EXPORT_NAME }}-apk
+          path: build/*.apk
+
+      - name: GitHub Release (при теге v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*.apk
