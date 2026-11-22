@@ -24,6 +24,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Найти проект Godot
+        run: |
+          P=$(find . -maxdepth 3 -name project.godot -not -path "./.godot/*" | head -n 1)
+          if [ -z "$P" ]; then
+            echo "::error::project.godot не найден. Загрузите файлы проекта в репозиторий."
+            find . -maxdepth 2 -not -path "./.git/*" | head -40
+            exit 1
+          fi
+          echo "PROJECT_DIR=$(dirname "$P")" >> "$GITHUB_ENV"
+          echo "Проект: $(dirname "$P")"
+          ls -la "$(dirname "$P")"
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -34,11 +46,14 @@ jobs:
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | sudo -E env "PATH=$PATH" "$SDKM" --licenses > /dev/null || true
           sudo -E env "PATH=$PATH" "$SDKM" "platform-tools" "build-tools;35.0.1" "platforms;android-35" "cmake;3.10.2.4988404" "ndk;28.1.13356709"
+          ls "$ANDROID_HOME" "$ANDROID_HOME/build-tools"
+          java -version
 
       - name: Godot и шаблоны экспорта
         run: |
           V="$GODOT_VERSION"
           URL="https://github.com/godotengine/godot-builds/releases/download/${V}-stable"
+          cd "$RUNNER_TEMP"
           wget -q "$URL/Godot_v${V}-stable_linux.x86_64.zip"
           wget -q "$URL/Godot_v${V}-stable_export_templates.tpz"
           unzip -q "Godot_v${V}-stable_linux.x86_64.zip"
@@ -55,15 +70,93 @@ jobs:
           echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
           echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
 
+      - name: Export preset (создать, если его нет в репозитории)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          cat > "$RUNNER_TEMP/preset.cfg" <<'EOF'
+          [preset.0]
+
+          name="Android"
+          platform="Android"
+          runnable=true
+          advanced_options=false
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter="build/*"
+          export_path="build/SoftBeamDrive.apk"
+          encryption_include_filters=""
+          encryption_exclude_filters=""
+          encrypt_pck=false
+          encrypt_directory=false
+
+          [preset.0.options]
+
+          custom_template/debug=""
+          custom_template/release=""
+          gradle_build/use_gradle_build=false
+          gradle_build/export_format=0
+          architectures/armeabi-v7a=false
+          architectures/arm64-v8a=true
+          architectures/x86=false
+          architectures/x86_64=false
+          keystore/debug=""
+          keystore/debug_user=""
+          keystore/debug_password=""
+          keystore/release=""
+          keystore/release_user=""
+          keystore/release_password=""
+          version/code=1
+          version/name="1.0.0"
+          package/unique_name="com.softbeam.drive"
+          package/name="SoftBeam Drive"
+          package/signed=true
+          package/app_category=2
+          package/retain_data_on_uninstall=false
+          package/exclude_from_recents=false
+          package/show_in_app_library=true
+          launcher_icons/main_192x192=""
+          launcher_icons/adaptive_foreground_432x432=""
+          launcher_icons/adaptive_background_432x432=""
+          graphics/opengl_debug=false
+          xr_features/xr_mode=0
+          screen/immersive_mode=true
+          screen/support_small=true
+          screen/support_normal=true
+          screen/support_large=true
+          screen/support_xlarge=true
+          user_data_backup/allow=false
+          command_line/extra_args=""
+          apk_expansion/enable=false
+          EOF
+          if [ -f export_presets.cfg ]; then
+            echo "export_presets.cfg найден в репозитории"
+          else
+            echo "export_presets.cfg не найден (шаблонный .gitignore Godot его исключает), создаю"
+            cp "$RUNNER_TEMP/preset.cfg" export_presets.cfg
+          fi
+
+      - name: Импорт ресурсов
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          godot --headless --import || true
+          S=$(ls "$HOME"/.config/godot/editor_settings-*.tres 2>/dev/null | head -n 1 || true)
+          if [ -n "$S" ]; then
+            printf '\nexport/android/java_sdk_path = "%s"\nexport/android/android_sdk_path = "%s"\n' "$JAVA_HOME" "$ANDROID_HOME" >> "$S"
+          fi
+
       - name: Экспорт debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           mkdir -p build
-          godot --headless --import || true
           godot --headless --export-debug "Android" "build/${EXPORT_NAME}-debug.apk"
           ls -lh build
+          test -f "build/${EXPORT_NAME}-debug.apk"
 
       - name: Экспорт release APK (если заданы секреты)
         if: env.KEYSTORE_B64 != ''
+        working-directory: ${{ env.PROJECT_DIR }}
         env:
           GODOT_ANDROID_KEYSTORE_RELEASE_USER: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
           GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -75,10 +168,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.EXPORT_NAME }}-apk
-          path: build/*.apk
+          path: ${{ env.PROJECT_DIR }}/build/*.apk
 
       - name: GitHub Release (при теге v*)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: build/*.apk
+          files: ${{ env.PROJECT_DIR }}/build/*.apk
