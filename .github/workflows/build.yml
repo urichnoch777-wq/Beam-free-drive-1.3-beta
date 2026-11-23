@@ -26,23 +26,47 @@ jobs:
 
       - name: Найти проект Godot
         run: |
-          if [ -f project.godot ]; then
-            D="."
-          else
-            P=$(find . -maxdepth 3 -name project.godot -not -path "./.godot/*" | head -n 1)
-            if [ -z "$P" ]; then
-              echo "::error::project.godot не найден. Загрузите файлы проекта в репозиторий."
-              find . -maxdepth 2 -not -path "./.git/*" | head -40
-              exit 1
+          NEED="project.godot main.tscn icon.svg scripts/boot.gd scripts/game.gd scripts/world.gd scripts/soft_car.gd scripts/hud.gd"
+          missing() { local m=""; for f in $NEED; do [ -f "$1/$f" ] || m="$m $f"; done; echo "$m"; }
+          D=""
+          SRC="файлы репозитория"
+          # 1) если в репозиторий загружен zip с проектом, берём его
+          for Z in $(find . -maxdepth 2 -name "*.zip" -not -path "./.git/*"); do
+            if unzip -l "$Z" | grep -q "project.godot"; then
+              rm -rf "$RUNNER_TEMP/zipproj"
+              mkdir -p "$RUNNER_TEMP/zipproj"
+              unzip -oq "$Z" -d "$RUNNER_TEMP/zipproj"
+              P=$(find "$RUNNER_TEMP/zipproj" -name project.godot | head -n 1)
+              if [ -n "$P" ]; then
+                D=$(dirname "$P")
+                SRC="архив $Z"
+                break
+              fi
             fi
-            D=$(dirname "$P")
+          done
+          # 2) иначе ищем project.godot в самом репозитории
+          if [ -z "$D" ]; then
+            if [ -f project.godot ]; then
+              D="."
+            else
+              P=$(find . -maxdepth 3 -name project.godot -not -path "./.godot/*" | head -n 1)
+              if [ -n "$P" ]; then D=$(dirname "$P"); fi
+            fi
+          fi
+          if [ -z "$D" ]; then M=" project.godot"; else M=$(missing "$D"); fi
+          if [ -n "$M" ]; then
+            echo "::error::Не хватает файлов проекта:$M"
+            {
+              echo "### Не хватает файлов проекта"
+              echo "$M"
+              echo "Загрузите в корень репозитория архив softbeam-drive-godot.zip целиком: воркфлоу распакует его сам."
+            } >> "$GITHUB_STEP_SUMMARY"
+            find . -maxdepth 3 -not -path "./.git/*" | head -n 60
+            exit 1
           fi
           echo "PROJECT_DIR=$D" >> "$GITHUB_ENV"
-          echo "Проект: $D"
-          ls -la "$D" || true
-          ls -la "$D/scripts" || true
-          echo "----- project.godot -----"
-          cat "$D/project.godot"
+          echo "Источник проекта: $SRC; папка: $D" | tee -a "$GITHUB_STEP_SUMMARY"
+          ls -la "$D" "$D/scripts"
 
       - uses: actions/setup-java@v4
         with:
@@ -221,3 +245,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.PROJECT_DIR }}/build/*.apk
+          
