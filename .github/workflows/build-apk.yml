@@ -1,0 +1,29 @@
+name: Build Android APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: ubuntu-22.04
+    container:
+      image: barichello/godot-ci:4.3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Godot
+        run: |
+          mkdir -p ~/.config ~/.local/share/godot/export_templates
+          cp -r /root/.config/godot ~/.config/ || true
+          cp -r /root/.local/share/godot/export_templates/* ~/.local/share/godot/export_templates/ || true
+      - name: Import project
+        run: godot --headless --import || true
+      - name: Export debug APK
+        run: |
+          mkdir -p build
+          godot --headless --verbose --export-debug "Android" build/beam-free-drive.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: beam-free-drive-apk
+          path: build/beam-free-drive.apk
+          
