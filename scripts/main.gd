@@ -12,6 +12,9 @@ var hud
 var cam: Camera3D
 var cam_dir := Vector3(0, 0, -1)
 var slow_i := 0
+var orbit_yaw := 0.0
+var orbit_pitch := 0.0
+var idle_t := 0.0
 
 
 func _ready() -> void:
@@ -38,6 +41,8 @@ func _key(action: String, code: Key) -> void:
 
 
 func _setup_input() -> void:
+    if InputMap.has_action("throttle"):
+        return
     _key("throttle", KEY_W)
     _key("throttle", KEY_UP)
     _key("brake", KEY_S)
@@ -50,6 +55,7 @@ func _setup_input() -> void:
     _key("reset", KEY_R)
     _key("slowmo", KEY_T)
     _key("tc", KEY_Y)
+    _key("menu", KEY_ESCAPE)
 
 
 func _box(center: Vector3, size: Vector3, rot_x_deg: float, col: Color) -> void:
@@ -117,6 +123,8 @@ func _unhandled_input(e: InputEvent) -> void:
         _cycle_slow()
     elif e.is_action_pressed("tc"):
         car.tc = not car.tc
+    elif e.is_action_pressed("menu"):
+        _to_menu()
 
 
 func _process(delta: float) -> void:
@@ -128,6 +136,10 @@ func _process(delta: float) -> void:
     if hud.want_slow:
         hud.want_slow = false
         _cycle_slow()
+    if hud.want_menu:
+        hud.want_menu = false
+        _to_menu()
+        return
     car.in_throttle = maxf(Input.get_action_strength("throttle"), hud.gas)
     car.in_brake = maxf(Input.get_action_strength("brake"), hud.brake)
     car.in_hand = maxf(Input.get_action_strength("handbrake"), hud.hand)
@@ -138,6 +150,30 @@ func _process(delta: float) -> void:
     var f := Vector3(car.fwd.x, 0.0, car.fwd.z)
     if f.length() > 0.1:
         cam_dir = cam_dir.lerp(f.normalized(), 1.0 - exp(-4.0 * delta)).normalized()
+    if hud.cam_dx != 0.0 or hud.cam_dy != 0.0:
+        orbit_yaw -= hud.cam_dx * 0.006
+        orbit_pitch = clampf(orbit_pitch + hud.cam_dy * 0.004, -0.25, 1.0)
+        hud.cam_dx = 0.0
+        hud.cam_dy = 0.0
+        idle_t = 0.0
+    elif hud.cam_active:
+        idle_t = 0.0
+    else:
+        idle_t += delta
+        if idle_t > 2.5:
+            orbit_yaw = lerp_angle(orbit_yaw, 0.0, 1.0 - exp(-2.0 * delta))
+            orbit_pitch = lerpf(orbit_pitch, 0.0, 1.0 - exp(-2.0 * delta))
+    var d: Vector3 = cam_dir.rotated(Vector3.UP, orbit_yaw)
+    var elev: float = clampf(0.33 + orbit_pitch, 0.05, 1.35)
     var target: Vector3 = car.center() + Vector3(0, 0.8, 0)
-    cam.global_position = target - cam_dir * 7.5 + Vector3(0, 2.6, 0)
+    cam.global_position = target - d * (8.0 * cos(elev)) + Vector3(0, 8.0 * sin(elev), 0)
     cam.look_at(target, Vector3.UP)
+
+
+func _to_menu() -> void:
+    get_tree().change_scene_to_file("res://scenes/menu.tscn")
+
+
+func _notification(what: int) -> void:
+    if what == NOTIFICATION_WM_GO_BACK_REQUEST:
+        _to_menu()
