@@ -163,7 +163,7 @@ func _draw() -> void:
     var kmh: int = int(car.speed * 3.6)
     draw_string(f, Vector2(30, 64), "%d km/h" % kmh, HORIZONTAL_ALIGNMENT_LEFT, -1, 44, Color.WHITE)
     draw_string(f, Vector2(30, 104), car.gear_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 32, Color(1, 0.9, 0.3))
-    var rr: float = clampf(car.rpm / 7000.0, 0.0, 1.0)
+    var rr: float = clampf(car.rpm / (car.REDLINE * 1.05), 0.0, 1.0)
     draw_rect(Rect2(30, 118, 300, 14), Color(1, 1, 1, 0.2), true)
     draw_rect(Rect2(30, 118, 300 * rr, 14), Color(1, 0.3, 0.2) if rr > 0.9 else Color(0.3, 0.9, 0.4), true)
     var tcol := Color(1, 0.3, 0.2) if car.temp > 110.0 else Color.WHITE
