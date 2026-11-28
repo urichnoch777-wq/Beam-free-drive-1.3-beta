@@ -3,6 +3,7 @@ extends Node3D
 ## двигатель с турбо, автоматическая КПП, кузов-«шкура» с деформацией.
 
 const SoftBody = preload("res://scripts/soft_body.gd")
+const ModelLoader = preload("res://scripts/model_loader.gd")
 
 
 class Wheel:
@@ -20,43 +21,43 @@ class Wheel:
     var fw := Vector3(0, 0, -1)
     var ax := Vector3.RIGHT
     var fz := 0.0
+    var free := 0.5
     var other: Wheel
     var node: MeshInstance3D
 
 
 # геометрия: 8 сечений вдоль машины, 2 яруса (пол/верх), nz колонн в ширину
 const NX := 8
-const WF := 0.88
+var WF := 0.88
 var ST_Z := PackedFloat32Array([-2.20, -1.30, -0.45, 0.20, 1.10, 1.50, 1.95, 2.25])
 var ST_TOP := PackedFloat32Array([0.64, 0.80, 0.90, 1.42, 1.42, 1.00, 0.97, 0.86])
 var ST_FLOOR := PackedFloat32Array([0.40, 0.30, 0.30, 0.30, 0.30, 0.30, 0.30, 0.40])
 var ST_WT := PackedFloat32Array([0.78, 0.84, 0.84, 0.70, 0.70, 0.78, 0.80, 0.78])
 var ST_STR := PackedFloat32Array([0.30, 0.60, 1.00, 1.00, 1.00, 0.90, 0.55, 0.30])
-const K_EDGE := 3.0e5
-const Y_BASE := 26000.0
+var K_EDGE := 3.0e5
+var Y_BASE := 26000.0
 # подвеска и шины
 const H_TOP := 0.45
-const SUSP_FREE := 0.51
-const INSET := 0.08
-const K_SPRING := 35000.0
-const C_BUMP := 3000.0
-const C_REB := 4500.0
+var INSET := 0.08
+var K_SPRING := 35000.0
+var C_BUMP := 3000.0
+var C_REB := 4500.0
 const BUMP_START := 0.17
-const K_BUMP := 250000.0
-const K_ARB_F := 18000.0
-const K_ARB_R := 9000.0
-const R_TIRE := 0.33
-const I_WHEEL := 1.6
+var K_BUMP := 250000.0
+var K_ARB_F := 18000.0
+var K_ARB_R := 9000.0
+var R_TIRE := 0.33
+var I_WHEEL := 1.6
 const MU0 := 1.1
-const MEFF := 100.0
+var MEFF := 100.0
 # двигатель и трансмиссия
 var GEARS := PackedFloat32Array([3.6, 2.2, 1.55, 1.2, 0.95, 0.78])
 var RPMS := PackedFloat32Array([0, 800, 1500, 2500, 3500, 4500, 5500, 6500, 7000, 7300])
 var TQS := PackedFloat32Array([0, 95, 190, 255, 280, 290, 280, 245, 190, 0])
 const REV := 3.4
-const FINAL := 3.9
-const IDLE := 900.0
-const REDLINE := 6800.0
+var FINAL := 3.9
+var IDLE := 900.0
+var REDLINE := 6800.0
 const DT_MAX := 1.0 / 480.0
 # кузов
 const DARK := Color(0.12, 0.12, 0.13)
@@ -83,7 +84,7 @@ var brake := 0.0
 var brake_cmd := 0.0
 var steer := 0.0
 var gear := 1
-var rpm := IDLE
+var rpm := 900.0
 var boost := 0.0
 var shift_t := 0.0
 var since_shift := 9.0
@@ -93,6 +94,12 @@ var coolant := 1.0
 var radiator_dead := false
 var engine_dead := false
 var gear_text := "D1"
+var turbo := 0.35
+var vmax := 90.0
+var ms := 1.0
+var has_model := false
+var spec_data := {}
+var body_mat: ShaderMaterial
 var front_len0 := 1.0
 var n_front := 0
 var n_front2 := 0
@@ -110,11 +117,46 @@ var _na := PackedVector3Array()
 var _ca := PackedColorArray()
 
 
-func setup(w, origin: Vector3, nz_: int = 3) -> void:
+func setup(w, origin: Vector3, spec: Dictionary = {}) -> void:
     world = w
-    nz = nz_
+    _apply_spec(spec)
     _build(origin)
     _make_visuals()
+
+
+func _apply_spec(sp: Dictionary) -> void:
+    spec_data = sp
+    if sp.has("st_z"):
+        ST_Z = PackedFloat32Array(sp["st_z"])
+        ST_TOP = PackedFloat32Array(sp["st_top"])
+        ST_FLOOR = PackedFloat32Array(sp["st_floor"])
+        ST_WT = PackedFloat32Array(sp["st_wt"])
+    WF = sp.get("wf", WF)
+    INSET = sp.get("inset", INSET)
+    R_TIRE = sp.get("r_tire", R_TIRE)
+    I_WHEEL = sp.get("i_wheel", I_WHEEL)
+    ms = float(sp.get("mass", 1230.0)) / 1230.0
+    K_EDGE *= ms
+    Y_BASE *= ms
+    K_SPRING *= ms
+    C_BUMP *= ms
+    C_REB *= ms
+    K_BUMP *= ms
+    K_ARB_F *= ms
+    K_ARB_R *= ms
+    MEFF *= ms
+    if sp.has("tqs"):
+        RPMS = PackedFloat32Array(sp["rpms"])
+        TQS = PackedFloat32Array(sp["tqs"])
+    if sp.has("gears"):
+        GEARS = PackedFloat32Array(sp["gears"])
+    FINAL = sp.get("final", FINAL)
+    REDLINE = sp.get("redline", REDLINE)
+    IDLE = sp.get("idle", IDLE)
+    turbo = sp.get("turbo", turbo)
+    vmax = sp.get("vmax", vmax)
+    rpm = IDLE
+    has_model = sp.has("model")
 
 
 func _idx(i: int, j: int, k: int) -> int:
@@ -176,19 +218,23 @@ func _build(origin: Vector3) -> void:
     _addm(_ids([5], [0]), 45.0)
     _addm(_ids([6], [0]), 45.0)
     _addm(_ids([6, 7], [1]), 40.0)
-    var defs := [[_idx(1, 0, 0), true, -1.0], [_idx(1, 0, nz - 1), true, 1.0],
-        [_idx(5, 0, 0), false, -1.0], [_idx(5, 0, nz - 1), false, 1.0]]
+    var defs := [[_idx(1, 0, 0), true, -1.0, 1], [_idx(1, 0, nz - 1), true, 1.0, 1],
+        [_idx(5, 0, 0), false, -1.0, 5], [_idx(5, 0, nz - 1), false, 1.0, 5]]
     for d in defs:
         var w := Wheel.new()
         w.mount = d[0]
         w.front = d[1]
         w.side = d[2]
+        w.free = ST_FLOOR[d[3]] + H_TOP + 0.09 - R_TIRE
         wheels.append(w)
         _addm([w.mount], 24.0)
     wheels[0].other = wheels[1]
     wheels[1].other = wheels[0]
     wheels[2].other = wheels[3]
     wheels[3].other = wheels[2]
+    for q in range(sb.mass.size()):
+        sb.mass[q] = sb.mass[q] * ms
+        sb.inv_mass[q] = 1.0 / sb.mass[q]
     for m in sb.mass:
         total_mass += m
     # балки: рёбра, диагонали граней, диагонали ячеек
@@ -247,33 +293,61 @@ func _build(origin: Vector3) -> void:
 
 func _make_visuals() -> void:
     skin = MeshInstance3D.new()
-    skin.mesh = ArrayMesh.new()
-    var mat := StandardMaterial3D.new()
-    mat.vertex_color_use_as_albedo = true
-    mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-    mat.roughness = 0.5
-    skin.material_override = mat
+    var wm: Array = []
+    if has_model:
+        var bm: Array = ModelLoader.load_meshes(spec_data["model"])
+        wm = ModelLoader.load_meshes(spec_data["wheels"])
+        if bm.size() == 0 or wm.size() < 4:
+            has_model = false
+        else:
+            skin.mesh = bm[0]
+            body_mat = ShaderMaterial.new()
+            body_mat.shader = load("res://shaders/car_body.gdshader")
+            body_mat.set_shader_parameter("st_z", ST_Z)
+            body_mat.set_shader_parameter("st_top", ST_TOP)
+            body_mat.set_shader_parameter("st_floor", ST_FLOOR)
+            body_mat.set_shader_parameter("st_wt", ST_WT)
+            body_mat.set_shader_parameter("wf", WF)
+            body_mat.set_shader_parameter("nodes", sb.pos)
+            body_mat.set_shader_parameter("car_basis", Basis.IDENTITY)
+            skin.material_override = body_mat
+            skin.custom_aabb = AABB(Vector3(-10000, -1000, -10000), Vector3(20000, 2000, 20000))
+    if not has_model:
+        skin.mesh = ArrayMesh.new()
+        var mat := StandardMaterial3D.new()
+        mat.vertex_color_use_as_albedo = true
+        mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+        mat.roughness = 0.5
+        skin.material_override = mat
     add_child(skin)
-    for w in wheels:
+    for wi in range(wheels.size()):
+        var w: Wheel = wheels[wi]
         var m := MeshInstance3D.new()
-        var cyl := CylinderMesh.new()
-        cyl.top_radius = R_TIRE
-        cyl.bottom_radius = R_TIRE
-        cyl.height = 0.22
-        cyl.radial_segments = 16
-        cyl.rings = 1
-        m.mesh = cyl
-        var tm := StandardMaterial3D.new()
-        tm.albedo_color = Color(0.07, 0.07, 0.08)
-        m.material_override = tm
-        var st := MeshInstance3D.new()
-        var bx := BoxMesh.new()
-        bx.size = Vector3(0.52, 0.24, 0.07)
-        st.mesh = bx
-        var sm := StandardMaterial3D.new()
-        sm.albedo_color = Color(0.75, 0.75, 0.78)
-        st.material_override = sm
-        m.add_child(st)
+        if has_model:
+            m.mesh = wm[wi]
+            var wmat := StandardMaterial3D.new()
+            wmat.vertex_color_use_as_albedo = true
+            wmat.roughness = 0.5
+            m.material_override = wmat
+        else:
+            var cyl := CylinderMesh.new()
+            cyl.top_radius = R_TIRE
+            cyl.bottom_radius = R_TIRE
+            cyl.height = 0.22
+            cyl.radial_segments = 16
+            cyl.rings = 1
+            m.mesh = cyl
+            var tm := StandardMaterial3D.new()
+            tm.albedo_color = Color(0.07, 0.07, 0.08)
+            m.material_override = tm
+            var st := MeshInstance3D.new()
+            var bx := BoxMesh.new()
+            bx.size = Vector3(0.52, 0.24, 0.07)
+            st.mesh = bx
+            var sm := StandardMaterial3D.new()
+            sm.albedo_color = Color(0.75, 0.75, 0.78)
+            st.material_override = sm
+            m.add_child(st)
         add_child(m)
         w.node = m
 
@@ -347,11 +421,11 @@ func _drive(dt: float, vlong: float) -> float:
     since_shift += dt
     if dir > 0 and shift_t <= 0.0 and since_shift > 0.6:
         var rg: float = absf(vlong) / R_TIRE * absf(gr) * 9.549297
-        if rg > 3500.0 + 3000.0 * thr and gear < 6:
+        if rg > REDLINE * (0.52 + 0.43 * thr) and gear < 6:
             gear += 1
             shift_t = 0.22
             since_shift = 0.0
-        elif rg < 1300.0 + 1300.0 * thr and gear > 1:
+        elif rg < REDLINE * (0.19 + 0.19 * thr) and gear > 1:
             gear -= 1
             shift_t = 0.18
             since_shift = 0.0
@@ -363,9 +437,10 @@ func _drive(dt: float, vlong: float) -> float:
     rpm += (rpm_t - rpm) * (1.0 - exp(-30.0 * dt))
     var tgt: float = clampf((rpm - 1800.0) / 1600.0, 0.0, 1.0) * thr
     boost += (tgt - boost) * (1.0 - exp(-(3.0 if tgt > boost else 6.0) * dt))
-    var t: float = _tq(rpm) * thr * (1.0 + 0.35 * boost) - (10.0 + 0.008 * rpm) * (1.0 - thr)
+    var t: float = _tq(rpm) * thr * (1.0 + turbo * boost) - (10.0 + 0.008 * rpm) * (1.0 - thr)
     if rpm > REDLINE + 200.0:
         t = minf(t, 0.0)
+    t *= clampf((vmax + 3.0 - speed) / 3.0, 0.0, 1.0)
     if engine_dead:
         t = 0.0
     var cap: float = 0.55 + 0.45 * cl
@@ -391,7 +466,7 @@ func _substep(dt: float) -> void:
     # проход 1: лучи подвески
     for w in wheels:
         w.origin = sb.pos[w.mount] + up * H_TOP - right * (w.side * INSET)
-        w.ray_len = SUSP_FREE + R_TIRE
+        w.ray_len = w.free + R_TIRE
         if world.raycast(w.origin, -up, w.ray_len):
             w.dist = world.hit_dist
             w.n = world.hit_n
@@ -496,59 +571,8 @@ func _quad(p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3, out: Vector3, col
 
 func _update_visuals() -> void:
     for w in wheels:
-        var drop: float = SUSP_FREE
+        var drop: float = w.free
         if w.grounded:
             drop = w.dist - R_TIRE
         var hub: Vector3 = w.origin - up * drop
-        var b0 := Basis(w.fw, w.ax, w.fw.cross(w.ax))
-        w.node.global_transform = Transform3D(b0 * Basis(Vector3.UP, -w.spin), hub)
-    var cen := Vector3.ZERO
-    for j in range(2):
-        for k in range(nz):
-            cen += sb.pos[_idx(3, j, k)] + sb.pos[_idx(4, j, k)]
-    cen /= float(4 * nz)
-    _va.clear()
-    _na.clear()
-    _ca.clear()
-    for q in range(q_kind.size()):
-        var p0: Vector3 = sb.pos[q_a[q]]
-        var p1: Vector3 = sb.pos[q_b[q]]
-        var p2: Vector3 = sb.pos[q_c[q]]
-        var p3: Vector3 = sb.pos[q_d[q]]
-        var dmg: float = maxf(absf(p0.distance_to(p2) - q_d0[q]) / q_d0[q], absf(p1.distance_to(p3) - q_d1[q]) / q_d1[q])
-        var kind: int = q_kind[q]
-        var col: Color = COLORS[kind]
-        var out: Vector3 = (p0 + p1 + p2 + p3) * 0.25 - cen
-        if kind == 1:
-            if dmg < 0.06:
-                _quad(p0, p1, p2, p3, out, col)
-            continue
-        col = col.lerp(DARK, minf(dmg * 4.0, 0.7))
-        if kind == 3:
-            var m0: Vector3 = p0.lerp(p3, 0.5)
-            var m1: Vector3 = p1.lerp(p2, 0.5)
-            _quad(p0, p1, m1, m0, out, col)
-            if dmg < 0.06:
-                _quad(m0, m1, p2, p3, out, COLORS[1])
-        else:
-            _quad(p0, p1, p2, p3, out, col)
-    var mesh := skin.mesh as ArrayMesh
-    mesh.clear_surfaces()
-    if _va.size() > 0:
-        var arr := []
-        arr.resize(Mesh.ARRAY_MAX)
-        arr[Mesh.ARRAY_VERTEX] = _va
-        arr[Mesh.ARRAY_NORMAL] = _na
-        arr[Mesh.ARRAY_COLOR] = _ca
-        mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
-
-
-func _process(delta: float) -> void:
-    var total: float = minf(delta, 0.05) * sim_speed
-    if total > 0.0:
-        var n: int = clampi(ceili(total / DT_MAX), 1, 12)
-        var dt: float = minf(total / float(n), DT_MAX)
-        for _i in range(n):
-            _substep(dt)
-        _update_status(dt * n)
-    _update_visuals()
+        var b0 := Basis(w.fw, w.ax, w.
