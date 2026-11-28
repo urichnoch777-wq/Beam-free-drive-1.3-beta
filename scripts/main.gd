@@ -4,6 +4,7 @@ extends Node3D
 const World = preload("res://scripts/world.gd")
 const Car = preload("res://scripts/car.gd")
 const Hud = preload("res://scripts/hud.gd")
+const CarSpecs = preload("res://scripts/car_specs.gd")
 const SLOW := [1.0, 0.25, 0.05, 0.01]
 
 var world
@@ -106,7 +107,7 @@ func _spawn() -> void:
         car.queue_free()
     car = Car.new()
     add_child(car)
-    car.setup(world, Vector3(0, 0.1, 0), 3)
+    car.setup(world, Vector3(0, 0.1, 0), CarSpecs.get_spec(GameSettings.car_id))
     car.sim_speed = SLOW[slow_i]
     hud.car = car
 
