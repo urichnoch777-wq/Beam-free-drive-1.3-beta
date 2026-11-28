@@ -1,11 +1,15 @@
 extends Control
 ## Главное меню и настройки.
 
+const CarSpecs = preload("res://scripts/car_specs.gd")
 const DESCR := ["Кнопки-стрелки слева на экране", "Крути руль пальцем", "Наклоняй телефон как руль (кнопка CAL — калибровка)"]
 
 var main_box: VBoxContainer
 var set_box: VBoxContainer
 var desc: Label
+var car_box: VBoxContainer
+var car_name: Label
+var car_info: Label
 
 
 func _ready() -> void:
@@ -19,8 +23,9 @@ func _ready() -> void:
     add_child(center)
     main_box = _vbox(center)
     set_box = _vbox(center)
+    car_box = _vbox(center)
     _label(main_box, "BEAM FREE DRIVE", 60)
-    _button(main_box, "ИГРАТЬ", _play)
+    _button(main_box, "НАЧАТЬ ЗАЕЗД", _show_cars)
     _button(main_box, "НАСТРОЙКИ", _show_settings)
     _label(set_box, "НАСТРОЙКИ", 48)
     _label(set_box, "Управление", 30)
@@ -57,6 +62,51 @@ func _ready() -> void:
     set_box.add_child(inv)
     _button(set_box, "НАЗАД", _show_main)
     set_box.visible = false
+    _label(car_box, "ВЫБОР МАШИНЫ", 48)
+    var crow := HBoxContainer.new()
+    crow.alignment = BoxContainer.ALIGNMENT_CENTER
+    crow.add_theme_constant_override("separation", 16)
+    car_box.add_child(crow)
+    _small_btn(crow, "<", _cycle.bind(-1))
+    car_name = Label.new()
+    car_name.custom_minimum_size = Vector2(520, 90)
+    car_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    car_name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    car_name.add_theme_font_size_override("font_size", 38)
+    crow.add_child(car_name)
+    _small_btn(crow, ">", _cycle.bind(1))
+    car_info = _label(car_box, "", 26)
+    _button(car_box, "ИГРАТЬ", _play)
+    _button(car_box, "НАЗАД", _show_main)
+    car_box.visible = false
+    _refresh_car()
+
+
+func _small_btn(parent: Node, text: String, cb: Callable) -> void:
+    var b := Button.new()
+    b.text = text
+    b.custom_minimum_size = Vector2(90, 90)
+    b.add_theme_font_size_override("font_size", 40)
+    b.pressed.connect(cb)
+    parent.add_child(b)
+
+
+func _cycle(d: int) -> void:
+    var n: int = CarSpecs.list().size()
+    GameSettings.car_id = (GameSettings.car_id + d + n) % n
+    GameSettings.save()
+    _refresh_car()
+
+
+func _refresh_car() -> void:
+    var sp: Dictionary = CarSpecs.get_spec(GameSettings.car_id)
+    car_name.text = sp["name"]
+    car_info.text = sp["info"]
+
+
+func _show_cars() -> void:
+    main_box.visible = false
+    car_box.visible = true
 
 
 func _vbox(parent: Node) -> VBoxContainer:
@@ -96,6 +146,7 @@ func _show_settings() -> void:
 
 func _show_main() -> void:
     set_box.visible = false
+    car_box.visible = false
     main_box.visible = true
 
 
@@ -117,7 +168,7 @@ func _set_invert(on: bool) -> void:
 
 func _notification(what: int) -> void:
     if what == NOTIFICATION_WM_GO_BACK_REQUEST:
-        if set_box != null and set_box.visible:
+        if (set_box != null and set_box.visible) or (car_box != null and car_box.visible):
             _show_main()
         else:
             get_tree().quit()
